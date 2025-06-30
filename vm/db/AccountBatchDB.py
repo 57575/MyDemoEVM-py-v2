@@ -3,16 +3,11 @@ import collections
 from itertools import (
     count,
 )
-from typing import (
-    Callable,
-    Dict,
-    List,
-    Union,
-    cast,
-)
+from typing import Callable, Dict, List, Union, cast, Set
 from eth_utils.toolz import (
     first,
 )
+from eth_utils import ValidationError
 from eth_typing import Address
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.engine import Engine
@@ -24,9 +19,10 @@ class DeletedEntry:
     pass
 
 
-# 1. key modified in journal
-# 2. key deleted
-DELETE_WRAPPED = DeletedEntry()
+# key deleted
+DELETE = DeletedEntry()
+# key need to be revert to db value
+REVERT_DB = DeletedEntry()
 
 ChangesetValue = Union[bytes, DeletedEntry]
 ChangesetDict = Dict[bytes, ChangesetValue]
@@ -43,7 +39,15 @@ class AccountBatchDB:
         self._journal_data: collections.OrderedDict[DBCheckpoint, ChangesetDict] = (
             collections.OrderedDict()
         )
+        self._clears_at: Set[DBCheckpoint] = set()
         self.reset()
+
+    @property
+    def root_checkpoint(self) -> DBCheckpoint:
+        """
+        Returns the starting checkpoint
+        """
+        return first(self._journal_data.keys())
 
     @property
     def last_checkpoint(self) -> DBCheckpoint:
@@ -57,15 +61,24 @@ class AccountBatchDB:
     def get_item(self, key: bytes):
         ## in py-evm, consider warpped db, but we did not consider
         default_result = None  # indicate that caller should check wrapped database
-        return self._current_values.get(key, default_result)
+        value = self._current_values.get(key, default_result)
+        if type(value) == DeletedEntry:
+            return None
+        return value
 
     def set_item(self, key: bytes, value: bytes):
         # if the value has not been changed since wrapping,
         # then simply revert to original value
         revert_changeset = self._journal_data[self.last_checkpoint]
         if key not in revert_changeset:
-            revert_changeset[key] = self._current_values.get(key, DELETE_WRAPPED)
+            revert_changeset[key] = self._current_values.get(key, REVERT_DB)
         self._current_values[key] = value
+
+    def delete_item(self, key: bytes):
+        revert_changeset = self._journal_data[self.last_checkpoint]
+        if key not in revert_changeset:
+            revert_changeset[key] = self._current_values.get(key, REVERT_DB)
+        self.set_item(key, DELETE)
 
     def has_checkpoint(self, checkpoint: DBCheckpoint) -> bool:
         return checkpoint in self._checkpoint_stack
@@ -108,12 +121,14 @@ class AccountBatchDB:
             checkpoint_id, rollback_data = self._journal_data.popitem()
 
             for old_key, old_value in rollback_data.items():
-                if old_value is DELETE_WRAPPED:
-                    self._current_values.pop(old_key, None)
+                if type(old_value) is DeletedEntry:
+                    self._current_values[old_key] = old_value
                 elif type(old_value) is bytes:
                     self._current_values[old_key] = old_value
                 else:
                     raise Exception(f"Unexpected value, must be bytes: {old_value!r}")
+            if checkpoint_id in self._clears_at:
+                self._clears_at.remove(checkpoint_id)
 
             if checkpoint_id == through_checkpoint_id:
                 break
@@ -148,6 +163,7 @@ class AccountBatchDB:
 
         return self._current_values
 
+    # == clear means clear all data in the db ==#
     def clear(self) -> None:
         """
         Treat as if the *underlying* database will also be cleared by some other
@@ -157,6 +173,24 @@ class AccountBatchDB:
         checkpoint = get_next_checkpoint()
         self._journal_data[checkpoint] = self._current_values
         self._current_values = {}
+        self._clears_at.add(checkpoint)
+
+    def has_clear(self) -> bool:
+        at_checkpoint = self.root_checkpoint
+        for reversion_changeset_id in reversed(self._journal_data.keys()):
+            if reversion_changeset_id in self._clears_at:
+                return True
+            elif at_checkpoint == reversion_changeset_id:
+                return False
+        raise ValidationError(f"Checkpoint {at_checkpoint} is not in the journal")
+
+    def clear_hard_disk(self) -> None:
+        Session = sessionmaker(bind=self.engine)
+        with Session() as session:
+            session.query(AccountStorageModel).filter_by(
+                account_address=self.account_address
+            ).delete()
+            session.commit()
 
     def __initial_from_raw_db(self) -> None:
         Session = sessionmaker(bind=self.engine)
@@ -172,6 +206,7 @@ class AccountBatchDB:
     def __pop_all(self) -> ChangesetDict:
         final_changes = self._current_values
         self._journal_data.clear()
+        self._clears_at.clear()
         self._current_values = {}
         self._checkpoint_stack.clear()
         self.record_checkpoint()
@@ -205,55 +240,28 @@ class AccountBatchDB:
                     .all()
                 )
                 existing_slot_map = {item.slot: item for item in existing_data}
-                # 1. 新增或更新
+                # 更新数据库中的每个值
                 for slot, value in current_data.items():
-                    if slot in existing_slot_map:
-                        # 更新
-                        existing_slot_map[slot].value = value
+                    if value is DELETE:
+                        # 删除操作
+                        item = existing_slot_map.get(slot)
+                        if item:
+                            session.delete(item)
+                    elif value is REVERT_DB:
+                        pass
                     else:
-                        # 新增
-                        new_item = AccountStorageModel(
-                            address=self.account_address, slot=slot, value=value
-                        )
-                        session.add(new_item)
-
-                # 2. 删除
-                for slot, item in existing_slot_map.items():
-                    if slot not in current_data:
-                        session.delete(item)
+                        # 更新或新增操作
+                        if slot in existing_slot_map:
+                            # 更新现有记录
+                            existing_slot_map[slot].value = value
+                        else:
+                            # 新增记录
+                            new_item = AccountStorageModel(
+                                address=self.account_address, slot=slot, value=value
+                            )
+                            session.add(new_item)
                 session.commit()
             self.__initial_from_raw_db()
         except Exception:
             self.__reapply_checkpoint_to_journal(current_data)
             raise
-
-
-# # %%
-# from sqlalchemy import create_engine
-
-# engine = create_engine("sqlite:///accounts.db")
-# account_address = "0x7A58C0BE7035CD34E9BC4BD31B8E3399A565C77905"
-# test_account_db = AccountBatchDB(engine=engine, account_address=account_address)
-# # %%
-# test_account_db.last_checkpoint
-# # %%
-# a = test_account_db.get_item(bytes(512))
-# print(a)
-# # %%
-# test_account_db.set_item(bytes([1]), bytes(32))
-# # %%
-# print(test_account_db.get_item(bytes([1])))
-
-# # %%
-# print(test_account_db.has_checkpoint(DBCheckpoint(0)))
-# print(test_account_db.has_checkpoint(DBCheckpoint(1)))
-
-# # %%
-# print(test_account_db.record_checkpoint())
-# # %%
-# test_account_db.discard(DBCheckpoint(1))
-
-# # %%
-# test_account_db.persist()
-
-# %%

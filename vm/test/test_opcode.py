@@ -24,8 +24,9 @@ from vm.ExecutionContext import ExecutionContext
 from vm.EthereumAPI import EthereumAPI
 from vm.AbstractClass import ComputationAPI, StateAPI, ExecutionContextAPI
 from vm.TransactionContext import BaseTransactionContext
-from vm.config import SQLALCHEMY_DATABASE_URI
+from vm.config import MOCK_DATABASE_URI, SQLALCHEMY_DATABASE_URI
 import vm.OpcodeValues as opcode_values
+from vm.db import check_database
 
 NORMALIZED_ADDRESS_A = "0x0f572e5295c57f15886f9b263e2f6d2d6c7b5ec6"
 NORMALIZED_ADDRESS_B = "0xcd1722f3947def4cf144679da39c4c32bdc35681"
@@ -71,7 +72,7 @@ def create_execution_context(block_number: str = "latest") -> ExecutionContextAP
 
 def build_state(block_number: str = "latest") -> BaseState:
     execution_context = create_execution_context(block_number)
-    engine = create_engine(SQLALCHEMY_DATABASE_URI)
+    engine = check_database(MOCK_DATABASE_URI)
     return BaseState(engine=engine, execution_context=execution_context)
 
 

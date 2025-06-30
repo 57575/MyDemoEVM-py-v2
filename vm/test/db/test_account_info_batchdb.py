@@ -53,9 +53,19 @@ def test_set_item_empty(db: AccountInfoBatchDB) -> None:
     db.set_item(b"key", b"value")
     assert db.get_item(b"key") == b"value"
 
-    # 删除项目
-    db.set_item(b"key", b"")  # 使用空字节表示删除
-    assert db.get_item(b"key") == b""
+
+def test_delete_item(db: AccountInfoBatchDB) -> None:
+    # 测试删除已存在的项目
+    db.set_item(CANONICAL_ADDRESS_A, b"value1")
+    assert db.get_item(CANONICAL_ADDRESS_A) == b"value1"
+
+    db.delete_item(CANONICAL_ADDRESS_A)
+    assert db.get_item(CANONICAL_ADDRESS_A) is None
+
+    # 测试删除不存在的项目（应抛出KeyError）
+    with pytest.raises(KeyError) as exc_info:
+        db.delete_item(CANONICAL_ADDRESS_B)
+    assert "key could not be deleted" in str(exc_info.value)
 
 
 # ===== 事务管理测试 =====
@@ -304,7 +314,7 @@ def test_discard_after_commit_fails(db: AccountInfoBatchDB) -> None:
 
 @pytest.mark.parametrize("checkpoint_value", [1, 2, 3])
 def test_commit_multiple_and_discard_later(
-        checkpoint_value, db: AccountInfoBatchDB
+    checkpoint_value, db: AccountInfoBatchDB
 ) -> None:
     key = b"\x01"
 
@@ -382,6 +392,7 @@ def test_reset(db: AccountInfoBatchDB) -> None:
     assert len(db._checkpoint_stack) == 1  # 应该有一个初始检查点
 
 
+# ===== 测试持久化功能 =====
 # 测试持久化功能
 def test_persist(db: AccountInfoBatchDB) -> None:
     # 设置项目
@@ -408,18 +419,147 @@ def test_persist(db: AccountInfoBatchDB) -> None:
         )
         assert existing_data[0].address == CANONICAL_ADDRESS_A
         assert (
-                isinstance(existing_data[0].address, bytes)
-                and len(existing_data[0].address) == 20
+            isinstance(existing_data[0].address, bytes)
+            and len(existing_data[0].address) == 20
         )
         assert existing_data[0].rlp_account == b"value1"
         assert isinstance(existing_data[0].rlp_account, bytes)
         assert existing_data[1].address == CANONICAL_ADDRESS_B
         assert (
-                isinstance(existing_data[1].address, bytes)
-                and len(existing_data[1].address) == 20
+            isinstance(existing_data[1].address, bytes)
+            and len(existing_data[1].address) == 20
         )
         assert existing_data[1].rlp_account == b"value2"
         assert isinstance(existing_data[1].rlp_account, bytes)
+
+
+def test_persist_add_new_data(db: AccountInfoBatchDB) -> None:
+    # 测试持久化新增数据
+    db.set_item(CANONICAL_ADDRESS_A, b"new_value")
+    db.persist()
+
+    Session = sessionmaker(bind=db.engine)
+    with Session() as session:
+        item = session.query(AccountModel).filter_by(address=CANONICAL_ADDRESS_A).one()
+        assert item.rlp_account == b"new_value"
+
+
+def test_persist_update_existing_data(db: AccountInfoBatchDB) -> None:
+    # 预填充数据
+    Session = sessionmaker(bind=db.engine)
+    with Session() as session:
+        existing = AccountModel(address=CANONICAL_ADDRESS_A, rlp_account=b"old_value")
+        session.add(existing)
+        session.commit()
+
+    # 更新数据并持久化
+    db.set_item(CANONICAL_ADDRESS_A, b"updated_value")
+    db.persist()
+
+    # 验证更新结果
+    with Session() as session:
+        item = session.query(AccountModel).filter_by(address=CANONICAL_ADDRESS_A).one()
+        assert item.rlp_account == b"updated_value"
+
+
+def test_persist_delete_data(db: AccountInfoBatchDB) -> None:
+    # 预填充数据
+    Session = sessionmaker(bind=db.engine)
+    with Session() as session:
+        existing = AccountModel(
+            address=CANONICAL_ADDRESS_A, rlp_account=b"to_be_deleted"
+        )
+        session.add(existing)
+        session.commit()
+
+    # 删除数据并持久化
+    db.set_item(CANONICAL_ADDRESS_A, b"to_be_deleted")  # 先设置以标记为已访问
+    db.delete_item(CANONICAL_ADDRESS_A)
+    db.persist()
+
+    # 验证删除结果
+    with Session() as session:
+        count = (
+            session.query(AccountModel).filter_by(address=CANONICAL_ADDRESS_A).count()
+        )
+        assert count == 0
+
+
+def test_persist_multiple_operations(db: AccountInfoBatchDB) -> None:
+    # 预填充数据
+    Session = sessionmaker(bind=db.engine)
+    with Session() as session:
+        existing1 = AccountModel(address=CANONICAL_ADDRESS_A, rlp_account=b"old_value1")
+        existing2 = AccountModel(address=CANONICAL_ADDRESS_B, rlp_account=b"old_value2")
+        session.add_all([existing1, existing2])
+        session.commit()
+
+    # 组合操作：更新A，删除B，新增C
+    db.set_item(CANONICAL_ADDRESS_A, b"updated_value")  # 更新
+    db.set_item(CANONICAL_ADDRESS_B, b"old_value2")  # 标记为已访问以便删除
+    db.delete_item(CANONICAL_ADDRESS_B)  # 删除
+    db.set_item(CANONICAL_ADDRESS_C, b"new_value")  # 新增
+    db.persist()
+
+    # 验证组合操作结果
+    with Session() as session:
+        a_item = (
+            session.query(AccountModel).filter_by(address=CANONICAL_ADDRESS_A).one()
+        )
+        assert a_item.rlp_account == b"updated_value"
+
+        b_count = (
+            session.query(AccountModel).filter_by(address=CANONICAL_ADDRESS_B).count()
+        )
+        assert b_count == 0
+
+        c_item = (
+            session.query(AccountModel).filter_by(address=CANONICAL_ADDRESS_C).one()
+        )
+        assert c_item.rlp_account == b"new_value"
+
+
+def test_checkpoint_rollback_and_persist(db: AccountInfoBatchDB) -> None:
+    # 预先填充CANONICAL_ADDRESS_A的值 (假设初始值为b'initial')
+    Session = sessionmaker(bind=db.engine)
+    with Session() as session:
+        initial_data = AccountModel(address=CANONICAL_ADDRESS_A, rlp_account=b"initial")
+        session.add(initial_data)
+        session.commit()
+
+    # 提交检查点0 (初始化状态)
+    checkpoint_0 = db.record_checkpoint()
+
+    # 提交检查点1，在检查点1设置CANONICAL_ADDRESS_A为b'checkpoint1'
+    checkpoint_1 = db.record_checkpoint()
+    db.set_item(CANONICAL_ADDRESS_A, b"checkpoint1")
+
+    # 提交检查点2，在检查点2删除CANONICAL_ADDRESS_A的值
+    checkpoint_2 = db.record_checkpoint()
+    db.delete_item(CANONICAL_ADDRESS_A)
+
+    # 提交检查点3，在检查点3设置CANONICAL_ADDRESS_A的值为b'checkpoint3'
+    checkpoint_3 = db.record_checkpoint()
+    db.set_item(CANONICAL_ADDRESS_A, b"checkpoint3")
+
+    # 验证当前状态
+    assert db.get_item(CANONICAL_ADDRESS_A) == b"checkpoint3", "检查点3数据验证"
+
+    # 回滚至检查点0（丢弃所有后续检查点）
+    db.discard(checkpoint_0)
+
+    # 验证回滚后状态恢复到初始状态
+    assert db.get_item(CANONICAL_ADDRESS_A) is None
+
+    # 持久化到数据库
+    db.persist()
+
+    # 验证数据库中的值未被正确清除
+    with Session() as session:
+        count = (
+            session.query(AccountModel).filter_by(address=CANONICAL_ADDRESS_A).count()
+        )
+        assert count == 1, "持久化后数据未被正确删除"
 
 
 # 测试异常情况

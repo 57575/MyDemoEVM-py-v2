@@ -29,11 +29,13 @@ def test_pop():
 
 def test_mload():
     computation = run_general_computation()
+    computation.extend_memory(0, 32)
     computation.memory_write(0, 32, decode_hex("0xFF").rjust(32, b"\x00"))
     computation.stack_push_int(0)
     computation.opcodes[opcode_values.MLOAD](computation)
     computation.stack_pop1_bytes() == decode_hex("0xFF").rjust(32, b"\x00")
 
+    computation.extend_memory(33, 1)
     computation.memory_write(33, 1, decode_hex("0xFF"))
     computation.stack_push_int(1)
     computation.opcodes[opcode_values.MLOAD](computation)
@@ -103,22 +105,68 @@ def test_multiple_mstore8():
     assert computation.memory_read_bytes(0, 32) == b"\xff\xff".ljust(32, b"\x00")
 
 
-def test_sload():
-    pass
-
-
-def test_sstore(code, original):
-
+@pytest.mark.parametrize(
+    "load_key, store_key, store_value, expected",
+    [
+        ("00", "00", "46", decode_hex("46")),
+        ("01", "00", "46", decode_hex("00")),
+        ("01", "01", "46", decode_hex("46")),
+        (
+            "0100000000000000000000000000000000",
+            "0100000000000000000000000000000000",
+            "46",
+            decode_hex("46"),
+        ),
+        (
+            "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "46",
+            decode_hex("46"),
+        ),
+        (
+            "00",
+            "00",
+            "ffff",
+            decode_hex("ffff"),
+        ),
+        (
+            "8965",
+            "8965",
+            "ff",
+            decode_hex("ff"),
+        ),
+    ],
+)
+def test_sload(load_key, store_key, store_value, expected):
+    key_push_opcode = hex(opcode_values.PUSH0 + len(load_key) // 2)[2:]
+    value_push_opcode = hex(opcode_values.PUSH0 + len(store_value) // 2)[2:]
+    code_str = (
+        f"{value_push_opcode}"
+        + f"{store_value}"
+        + key_push_opcode
+        + f"{store_key}"
+        + f"{opcode_values.SSTORE:X}"
+        + key_push_opcode
+        + f"{load_key}"
+        + f"{opcode_values.SLOAD:X}"
+    )
     state = build_state()
+    state.touch_account(CANONICAL_ADDRESS_A)
+    computation = run_computation(state, None, decode_hex(code_str))
+    result = computation.stack_pop1_bytes()
+    assert result == expected
 
-    state.set_balance(CANONICAL_ADDRESS_B, 100000000000)
-    state.set_storage(CANONICAL_ADDRESS_B, 0, original)
-    assert state.get_storage(CANONICAL_ADDRESS_B, 0) == original
-    state.persist()
-    assert state.get_storage(CANONICAL_ADDRESS_B, 0, from_journal=True) == original
-    assert state.get_storage(CANONICAL_ADDRESS_B, 0, from_journal=False) == original
 
-    comp = run_computation(state, CANONICAL_ADDRESS_B, decode_hex(code))
+def test_sstore(original=1):
+    computation = run_general_computation()
+    computation.state.set_balance(CANONICAL_ADDRESS_B, 100000000000)
+    computation.state.set_storage(CANONICAL_ADDRESS_B, 0, original)
+    assert computation.state.get_storage(CANONICAL_ADDRESS_B, 0) == original
+    computation.state.persist()
+    assert (
+        computation.state.get_storage(CANONICAL_ADDRESS_B, 0, from_journal=True)
+        == original
+    )
 
 
 def test_jump():

@@ -22,7 +22,7 @@ from eth_utils import (
     to_dict,
     to_tuple,
 )
-
+from sqlalchemy.engine import Engine
 from cachetools import LRUCache
 
 import rlp
@@ -51,33 +51,17 @@ from vm.db.AccountInfoBatchDB import AccountInfoBatchDB
 
 IS_PRESENT_VALUE = b""
 
+# We focus on simulating transaction execution.
+# do not need for interaction and verification with the main chain.
+# Therefore, we use fake HASH values to simplify the process.
+EMPTY_STATE_ROOT = b"\x00" * 32
+EMPTY_STORAGE_ROOT = b"\x00" * 32
+
 
 class AccountDB(AccountDatabaseAPI):
     logger = get_extended_debug_logger("eth.db.account.AccountDB")
 
-    # def __init__(
-    #     self, db: AtomicDatabaseAPI, state_root: Hash32 = BLANK_ROOT_HASH
-    # ) -> None:
-    #     r""" """
-    # self._raw_store_db = KeyAccessLoggerAtomicDB(db, log_missing_keys=False)
-    # self._batchdb = BatchDB(self._raw_store_db)
-    # self._batchtrie = BatchDB(self._raw_store_db, read_through_deletes=True)
-    # self._journaldb = JournalDB(self._batchdb)
-    # self._trie = HashTrie(HexaryTrie(self._batchtrie, state_root, prune=True))
-    # self._trie_logger = KeyAccessLoggerDB(self._trie, log_missing_keys=False)
-    # self._trie_cache = CacheDB(self._trie_logger)
-    # self._journaltrie = JournalDB(self._trie_cache)
-    # self._account_cache: LRU[Address, Account] = LRU(2048)
-    # self._account_stores: Dict[Address, AccountStorageDB] = {}
-    # self._dirty_accounts: Set[Address] = set()
-    # self._root_hash_at_last_persist = state_root
-    # self._accessed_accounts: Set[Address] = set()
-    # self._accessed_bytecodes: Set[Address] = set()
-    # Track whether an account or slot have been accessed
-    # during a given transaction:
-    # self._reset_access_counters()
-
-    def __init__(self, engine) -> None:
+    def __init__(self, engine: Engine) -> None:
         self.engine = engine
         self._account_cache: LRUCache[Address, Account] = LRUCache(maxsize=2048)
         self._account_stores: Dict[Address, AccountStorageDB] = {}  # key-map storage
@@ -88,24 +72,16 @@ class AccountDB(AccountDatabaseAPI):
         self._dirty_accounts: Set[Address] = set()
         self._accessed_accounts: Set[Address] = set()
         self._accessed_bytecodes: Set[Address] = set()
-        self._root_hash: Hash32 = None
+        self._root_hash: Hash32 = EMPTY_STATE_ROOT
 
     @property
     def state_root(self) -> Hash32:
         return self._root_hash
-        # return self._trie.root_hash
 
     @state_root.setter
     def state_root(self, value: Hash32) -> None:
         if self._root_hash != value:
             self._root_hash = value
-        # if self._trie.root_hash != value:
-        #     self._trie_cache.reset_cache()
-        #     self._trie.root_hash = value
-
-    def has_root(self, state_root: bytes) -> bool:
-        raise NotImplementedError("not implement has_root")
-        # return state_root in self._batchtrie
 
     #
     # Storage
@@ -125,6 +101,9 @@ class AccountDB(AccountDatabaseAPI):
         validate_canonical_address(address, title="Storage Address")
 
         account_store = self._get_address_store(address)
+        if address not in self._dirty_accounts:
+            cp = self._journaldb.last_checkpoint
+            account_store.record(cp)
         self._dirty_accounts.add(address)
         account_store.set(slot, value)
 
@@ -133,7 +112,7 @@ class AccountDB(AccountDatabaseAPI):
             store = self._account_stores[address]
         else:
             storage_root = self._get_storage_root(address)
-            store = AccountStorageDB(engine=self.engine, account_address=address)
+            store = AccountStorageDB(engine=self.engine, address=address)
             self._account_stores[address] = store
         return store
 
@@ -176,13 +155,6 @@ class AccountDB(AccountDatabaseAPI):
             store = self._account_stores[address]
             yield address, store
 
-    @to_tuple
-    def _get_changed_roots(self) -> Iterable[Tuple[Address, Hash32]]:
-        # list all the accounts that were changed, and their new storage roots
-        for address, store in self._dirty_account_stores():
-            if store.has_changed_root:
-                yield address, store.get_changed_root()
-
     def _get_storage_root(self, address: Address) -> Hash32:
         account = self._get_account(address)
         return account.storage_root
@@ -190,19 +162,6 @@ class AccountDB(AccountDatabaseAPI):
     def _set_storage_root(self, address: Address, new_storage_root: Hash32) -> None:
         account = self._get_account(address)
         self._set_account(address, account.copy(storage_root=new_storage_root))
-
-    def _validate_flushed_storage(
-        self, address: Address, store: AccountStorageDB
-    ) -> None:
-        if store.has_changed_root:
-            actual_storage_root = self._get_storage_root(address)
-            expected_storage_root = store.get_changed_root()
-            if expected_storage_root != actual_storage_root:
-                raise ValidationError(
-                    "Storage root was not saved to account before trying to persist "
-                    f"roots. Account {address!r} had storage {actual_storage_root!r}, "
-                    f"but should be {expected_storage_root!r}."
-                )
 
     #
     # Balance
@@ -301,12 +260,13 @@ class AccountDB(AccountDatabaseAPI):
 
         if address in self._account_cache:
             del self._account_cache[address]
-        del self._journaltrie[address]
+        # del self._journaltrie[address]
+        self._journaltrie.delete_item(address)
 
     def account_exists(self, address: Address) -> bool:
         validate_canonical_address(address, title="Storage Address")
         account_rlp = self._get_encoded_account(address, from_journal=True)
-        return account_rlp != b""
+        return account_rlp is not None
 
     def touch_account(self, address: Address) -> None:
         validate_canonical_address(address, title="Storage Address")
@@ -319,13 +279,6 @@ class AccountDB(AccountDatabaseAPI):
             not self.account_has_code_or_nonce(address)
             and self.get_balance(address) == 0
         )
-
-    def is_address_warm(self, address: Address) -> bool:
-        return address in self._journal_accessed_state
-
-    def mark_address_warm(self, address: Address) -> None:
-        if address not in self._journal_accessed_state:
-            self._journal_accessed_state[address] = IS_PRESENT_VALUE
 
     #
     # Internal
@@ -365,14 +318,6 @@ class AccountDB(AccountDatabaseAPI):
         self._journaltrie.set_item(address, rlp_account)
         # self._journaltrie[address] = rlp_account
 
-    def _reset_access_counters(self) -> None:
-        # Account accesses and storage accesses recorded in the same journal
-        # Accounts just use the address as the key (and an empty value as a flag)
-        # Storage use a concatenation of address and slot converted to bytes
-        # (and empty value)
-        raise NotImplementedError("not implement access counters")
-        # self._journal_accessed_state = JournalDB(MemoryDB())
-
     #
     # Record and discard API
     #
@@ -400,62 +345,13 @@ class AccountDB(AccountDatabaseAPI):
         for _, store in self._dirty_account_stores():
             store.commit(checkpoint)
 
-    def lock_changes(self) -> None:
-        for _, store in self._dirty_account_stores():
-            store.lock_changes()
-        self._reset_access_counters()
-
     def make_state_root(self) -> Hash32:
-        for _address, store in self._dirty_account_stores():
-            store.make_storage_root()
-
-        for address, storage_root in self._get_changed_roots():
-            if self.account_exists(address) or storage_root != BLANK_ROOT_HASH:
-                self.logger.debug2(
-                    f"Updating account 0x{address.hex()} to storage root "
-                    f"0x{storage_root.hex()}",
-                )
-                self._set_storage_root(address, storage_root)
-
-        self._journaldb.persist()
-
-        # diff = self._journaltrie.diff()
-        # if diff.deleted_keys() or diff.pending_items():
-        #     # In addition to squashing (which is redundant here), this context manager
-        #     # causes an atomic commit of the changes, so exceptions will revert the trie
-        #     with self._trie.squash_changes() as memory_trie:
-        #         self._apply_account_diff_without_proof(diff, memory_trie)
-
-        self._journaltrie.reset()
-        # self._trie_cache.reset_cache()
-
         return self.state_root
 
-    def persist(self):
-        raise NotImplementedError("not implement persist")
-        self.make_state_root()
-
+    def persist(self) -> None:
         # persist storage
-        with self._raw_store_db.atomic_batch() as write_batch:
-            for address, store in self._dirty_account_stores():
-                self._validate_flushed_storage(address, store)
-                store.persist(write_batch)
-
-        for address, new_root in self._get_changed_roots():
-            if new_root is None:
-                raise ValidationError(
-                    f"Cannot validate new root of account 0x{address.hex()} "
-                    f"which has a new root hash of None"
-                )
-            elif new_root not in self._raw_store_db and new_root != BLANK_ROOT_HASH:
-                raise ValidationError(
-                    "After persisting storage trie, a root node was not found. "
-                    f"State root for account 0x{address.hex()} "
-                    f"is missing for hash 0x{new_root.hex()}."
-                )
-
-        # generate witness (copy) before clearing the underlying data
-        meta_witness = self._get_meta_witness()
+        for address, store in self._dirty_account_stores():
+            store.persist()
 
         # reset local storage trackers
         self._account_stores = {}
@@ -468,142 +364,8 @@ class AccountDB(AccountDatabaseAPI):
         self._account_cache.clear()
 
         # persist accounts
-        self._validate_generated_root()
         new_root_hash = self.state_root
         self.logger.debug2(f"Persisting new state root: 0x{new_root_hash.hex()}")
-        with self._raw_store_db.atomic_batch() as write_batch:
-            self._batchtrie.commit_to(write_batch, apply_deletes=False)
-            self._batchdb.commit_to(write_batch, apply_deletes=False)
+        self._journaldb.persist()
+        self._journaltrie.persist()
         self._root_hash_at_last_persist = new_root_hash
-
-        return meta_witness
-
-    def _get_accessed_node_hashes(self) -> Set[Hash32]:
-        raise NotImplementedError("not implement _get_accessed_node_hashes")
-        return cast(Set[Hash32], self._raw_store_db.keys_read)
-
-    @to_dict
-    def _get_access_list(self):
-        """
-        Get the list of addresses that were accessed, whether the bytecode was accessed,
-        and which storage slots were accessed.
-        """
-        raise NotImplementedError("not implement get access list")
-        for address in self._accessed_accounts:
-            did_access_bytecode = address in self._accessed_bytecodes
-            if address in self._account_stores:
-                accessed_storage_slots = self._account_stores[
-                    address
-                ].get_accessed_slots()
-            else:
-                accessed_storage_slots = frozenset()
-            yield address, AccountQueryTracker(
-                did_access_bytecode, accessed_storage_slots
-            )
-
-    def _get_meta_witness(self):
-        """
-        Get a variety of metadata about the state witness needed to execute the block.
-
-        This creates a copy, so that underlying changes do not affect the returned
-        MetaWitness.
-        """
-        raise NotImplementedError("not implement _get_meta_witness")
-        # return MetaWitness(self._get_accessed_node_hashes(), self._get_access_list())
-
-    def _validate_generated_root(self) -> None:
-        raise NotImplementedError("not implement _validate_generated_root")
-        db_diff = self._journaldb.diff()
-        if db_diff:
-            raise ValidationError(
-                f"AccountDB had a dirty db when it needed to be clean: {db_diff!r}"
-            )
-        trie_diff = self._journaltrie.diff()
-        if trie_diff:
-            raise ValidationError(
-                f"AccountDB had a dirty trie when it needed to be clean: {trie_diff!r}"
-            )
-
-    def _log_pending_accounts(self) -> None:
-        raise NotImplementedError("not implement _log_pending_accounts")
-        # This entire method is about debug2 logging, so skip it if debug2 is disabled
-        if not self.logger.show_debug2:
-            return
-
-        diff = self._journaltrie.diff()
-        for address in sorted(diff.pending_keys()):
-            account = self._get_account(Address(address))
-            self.logger.debug2(
-                f"Pending Account {to_checksum_address(address)}: "
-                f"balance {account.balance}, "
-                f"nonce {account.nonce}, "
-                f"storage root {encode_hex(account.storage_root)}, "
-                f"code hash {encode_hex(account.code_hash)}"
-            )
-        for deleted_address in sorted(diff.deleted_keys()):
-            # Check if the account was accessed before accessing/logging
-            # info about the address
-            was_account_accessed = deleted_address in self._accessed_accounts
-            cast_deleted_address = Address(deleted_address)
-            self.logger.debug2(
-                f"Deleted Account {to_checksum_address(deleted_address)}, "
-                f"empty? {self.account_is_empty(cast_deleted_address)}, "
-                f"exists? {self.account_exists(cast_deleted_address)}"
-            )
-            # If the account was not accessed previous to the log,
-            # (re)mark it as not accessed
-            if not was_account_accessed:
-                self._accessed_accounts.remove(cast_deleted_address)
-
-    def _apply_account_diff_without_proof(self, diff, trie: DatabaseAPI) -> None:
-        """
-        Apply diff of trie updates, when original nodes might be missing.
-        Note that doing this naively will raise exceptions about missing nodes
-        from *intermediate* trie roots. This captures exceptions and uses the previous
-        trie root hash that will be recognized by other nodes.
-        """
-        # It's fairly common that when an account is deleted, we need to retrieve nodes
-        # for accounts that were not needed during normal execution. We only need these
-        # nodes to refactor the trie.
-        # for delete_key in diff.deleted_keys():
-        #     try:
-        #         del trie[delete_key]
-        #     except trie_exceptions.MissingTrieNode as exc:
-        #         self.logger.debug(
-        #             "Missing node while deleting account with key "
-        #             f"{encode_hex(delete_key)}: {exc}"
-        #         )
-        #         raise MissingAccountTrieNode(
-        #             exc.missing_node_hash,
-        #             self._root_hash_at_last_persist,
-        #             exc.requested_key,
-        #         ) from exc
-
-        # It's fairly unusual, but possible, that setting an account will need unknown
-        # nodes during a trie refactor. Here is an example that seems to cause it:
-        #
-        # Setup:
-        #   - Root node is a branch, with 0 pointing to a leaf
-        #   - The complete leaf key is (0, 1, 2), so (1, 2) is in the leaf node
-        #   - We know the leaf node hash but not the leaf node body
-        # Refactor that triggers missing node:
-        #   - Add value with key (0, 3, 4)
-        #   - We need to replace the current leaf node with a branch that points leaves
-        #       at 1 and 3
-        #   - The leaf for key (0, 1, 2) now contains only the (2) part, so needs to
-        #       be rebuilt
-        #   - We need the full body of the old (1, 2) leaf node, to rebuild
-
-        # for key, val in diff.pending_items():
-        #     try:
-        #         trie[key] = val
-        #     except trie_exceptions.MissingTrieNode as exc:
-        #         self.logger.debug(
-        #             f"Missing node on account update key {encode_hex(key)} to "
-        #             f"{encode_hex(val)}: {exc}"
-        #         )
-        #         raise MissingAccountTrieNode(
-        #             exc.missing_node_hash,
-        #             self._root_hash_at_last_persist,
-        #             exc.requested_key,
-        #         ) from exc

@@ -16,9 +16,10 @@ class DeletedEntry:
     pass
 
 
-# 1. key modified in journal
-# 2. key deleted
-DELETE_WRAPPED = DeletedEntry()
+# key deleted
+DELETE = DeletedEntry()
+# key need to be revert to db value
+REVERT_DB = DeletedEntry()
 
 ChangesetValue = Union[bytes, DeletedEntry]
 ChangesetDict = Dict[bytes, ChangesetValue]
@@ -56,17 +57,31 @@ class AccountInfoBatchDB:
         default_result = None  # indicate that caller should check wrapped database
         if key not in self._accessed:
             self._accessed.add(key)
-        return self._current_values.get(key, default_result)
+        value = self._current_values.get(key, default_result)
+        if type(value) == DeletedEntry:
+            return None
+        return value
 
     def set_item(self, key: bytes, value: bytes):
         # if the value has not been changed since wrapping,
         # then simply revert to original value
         revert_changeset = self._journal_data[self.last_checkpoint]
         if key not in revert_changeset:
-            revert_changeset[key] = self._current_values.get(key, DELETE_WRAPPED)
+            revert_changeset[key] = self._current_values.get(key, REVERT_DB)
         if key not in self._accessed:
             self._accessed.add(key)
         self._current_values[key] = value
+
+    def delete_item(self, key: bytes):
+        if key in self._accessed:
+            revert_changeset = self._journal_data[self.last_checkpoint]
+            if key not in revert_changeset:
+                revert_changeset[key] = self._current_values.get(key, REVERT_DB)
+            self.set_item(key, DELETE)
+        else:
+            raise KeyError(
+                key, "key could not be deleted in JournalDB, because it was missing"
+            )
 
     def has_checkpoint(self, checkpoint: DBCheckpoint) -> bool:
         return checkpoint in self._checkpoint_stack
@@ -109,8 +124,8 @@ class AccountInfoBatchDB:
             checkpoint_id, rollback_data = self._journal_data.popitem()
 
             for old_key, old_value in rollback_data.items():
-                if old_value is DELETE_WRAPPED:
-                    self._current_values.pop(old_key, None)
+                if type(old_value) is DeletedEntry:
+                    self._current_values[old_key] = old_value
                 elif type(old_value) is bytes:
                     self._current_values[old_key] = old_value
                 else:
@@ -200,20 +215,26 @@ class AccountInfoBatchDB:
                     .all()
                 )
                 existing_slot_map = {item.address: item for item in existing_data}
-                # 1. 新增或更新
+                # 更新数据库中的每个值
                 for address, rlp_account in current_data.items():
-                    if address in existing_slot_map:
-                        # 更新
-                        existing_slot_map[address].rlp_account = rlp_account
+                    if rlp_account is DELETE:
+                        # 删除操作
+                        item = existing_slot_map.get(address)
+                        if item:
+                            session.delete(item)
+                    elif rlp_account is REVERT_DB:
+                        pass
                     else:
-                        # 新增
-                        new_item = AccountModel(address, rlp_account)
-                        session.add(new_item)
-
-                # 2. 删除
-                for address, item in existing_slot_map.items():
-                    if address not in current_data:
-                        session.delete(item)
+                        # 更新或新增操作
+                        if address in existing_slot_map:
+                            # 更新现有记录
+                            existing_slot_map[address].rlp_account = rlp_account
+                        else:
+                            # 新增记录
+                            new_item = AccountModel(
+                                address=address, rlp_account=rlp_account
+                            )
+                            session.add(new_item)
                 session.commit()
             self.__initial_from_raw_db()
         except Exception:

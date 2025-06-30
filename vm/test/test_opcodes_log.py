@@ -8,6 +8,7 @@ import vm.OpcodeValues as opcode_values
 
 def test_log0(offset=0, size=13):
     computation = run_general_computation()
+    computation.extend_memory(0, 13)
     computation.memory_write(0, 13, (b"Hello, World!"))
     computation.stack_push_int(size)
     computation.stack_push_int(offset)
@@ -33,6 +34,7 @@ def test_log0(offset=0, size=13):
 def test_log_with_topics(opcode: int, num_topics: int):
     computation = run_general_computation()
     # 设置内存
+    computation.extend_memory(0, 13)
     computation.memory_write(0, 13, (b"Hello, World!"))
 
     # 添加主题（每个主题是32bit的整数）

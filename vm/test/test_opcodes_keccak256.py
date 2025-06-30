@@ -23,6 +23,7 @@ import vm.OpcodeValues as opcode_values
 )
 def test_keccak256(start_position, size, memory_value, expected):
     computation = run_general_computation()
+    computation.extend_memory(start_position, size)
     computation.memory_write(start_position, size, memory_value)
     computation.stack_push_int(size)
     computation.stack_push_int(start_position)

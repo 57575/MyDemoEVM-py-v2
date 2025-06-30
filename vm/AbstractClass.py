@@ -962,13 +962,6 @@ class AccountDatabaseAPI(ABC):
         # sure that the setter doesn't actually get used as a noop.
         raise NotImplementedError
 
-    @abstractmethod
-    def has_root(self, state_root: bytes) -> bool:
-        """
-        Return ``True`` if the `state_root` exists, otherwise ``False``.
-        """
-        ...
-
     #
     # Storage
     #
@@ -1124,24 +1117,6 @@ class AccountDatabaseAPI(ABC):
         """
         ...
 
-    @abstractmethod
-    def is_address_warm(self, address: Address) -> bool:
-        """
-        Was the account accessed during this transaction?
-
-        See EIP-2929
-        """
-        ...
-
-    @abstractmethod
-    def mark_address_warm(self, address: Address) -> None:
-        """
-        Mark the account as accessed during this transaction.
-
-        See EIP-2929
-        """
-        ...
-
     #
     # Record and discard API
     #
@@ -1163,22 +1138,6 @@ class AccountDatabaseAPI(ABC):
     def commit(self, checkpoint: DBCheckpoint) -> None:
         """
         Collapse changes into ``checkpoint``.
-        """
-        ...
-
-    @abstractmethod
-    def lock_changes(self) -> None:
-        """
-        Locks in changes across all accounts' storage databases.
-
-        This is typically used at the end of a transaction, to make sure that
-        a revert doesn't roll back through the previous transaction, and to
-        be able to look up the "original" value of any account storage, where
-        "original" is the beginning of a transaction (instead of the beginning
-        of a block).
-
-        See :meth:`eth.abc.AccountStorageDatabaseAPI.lock_changes` for
-        what is called on each account's storage database.
         """
         ...
 
@@ -1251,11 +1210,11 @@ class ComputationAPI(
         Instantiate the computation.
         """
         ...
-    
+
     @abstractmethod
-    def get_debug_logger(self)->ExtendedDebugLogger:
-        """        
-        get the logger in the instance        
+    def get_debug_logger(self) -> ExtendedDebugLogger:
+        """
+        get the logger in the instance
         """
         ...
 

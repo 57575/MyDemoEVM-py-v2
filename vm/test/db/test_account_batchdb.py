@@ -10,6 +10,9 @@ from vm.db import check_database
 from vm.db.StateDBModel import AccountStorageModel
 
 CANONICAL_ADDRESS_A = to_canonical_address("0x0f572e5295c57f15886f9b263e2f6d2d6c7b5ec6")
+TEST_SLOT_A = b"\x00" * 32
+TEST_SLOT_B = b"\x01" * 32
+TEST_SLOT_C = b"\x02" * 32
 
 
 # 定义测试夹具
@@ -377,6 +380,7 @@ def test_reset(db: AccountBatchDB) -> None:
     assert len(db._checkpoint_stack) == 1  # 应该有一个初始检查点
 
 
+# ===== 测试持久化功能 =====
 # 测试持久化功能
 def test_persist(db: AccountBatchDB) -> None:
     # 设置项目
@@ -407,6 +411,162 @@ def test_persist(db: AccountBatchDB) -> None:
         assert isinstance(existing_data[1].slot, bytes)
         assert existing_data[1].value == b"value2"
         assert isinstance(existing_data[1].value, bytes)
+
+
+def test_persist_add_new_data(db: AccountBatchDB) -> None:
+    # 测试持久化新增数据
+    db.set_item(TEST_SLOT_A, b"new_value")
+    db.persist()
+
+    Session = sessionmaker(bind=db.engine)
+    with Session() as session:
+        item = (
+            session.query(AccountStorageModel)
+            .filter_by(account_address=CANONICAL_ADDRESS_A, slot=TEST_SLOT_A)
+            .one()
+        )
+        assert item.value == b"new_value"
+
+
+def test_persist_update_existing_data(db: AccountBatchDB) -> None:
+    # 预填充数据
+    Session = sessionmaker(bind=db.engine)
+    with Session() as session:
+        existing = AccountStorageModel(
+            address=CANONICAL_ADDRESS_A, slot=TEST_SLOT_A, value=b"old_value"
+        )
+        session.add(existing)
+        session.commit()
+
+    # 更新数据并持久化
+    db.set_item(TEST_SLOT_A, b"updated_value")
+    db.persist()
+
+    # 验证更新结果
+    with Session() as session:
+        item = (
+            session.query(AccountStorageModel)
+            .filter_by(account_address=CANONICAL_ADDRESS_A, slot=TEST_SLOT_A)
+            .one()
+        )
+        assert item.value == b"updated_value"
+
+
+def test_persist_delete_data(db: AccountBatchDB) -> None:
+    # 预填充数据
+    Session = sessionmaker(bind=db.engine)
+    with Session() as session:
+        existing = AccountStorageModel(
+            address=CANONICAL_ADDRESS_A,
+            slot=TEST_SLOT_A,
+            value=b"to_be_deleted",
+        )
+        session.add(existing)
+        session.commit()
+
+    # 删除数据并持久化
+    db.set_item(TEST_SLOT_A, b"to_be_deleted")  # 先设置以标记为已访问
+    db.delete_item(TEST_SLOT_A)
+    db.persist()
+
+    # 验证删除结果
+    with Session() as session:
+        count = (
+            session.query(AccountStorageModel)
+            .filter_by(account_address=CANONICAL_ADDRESS_A, slot=TEST_SLOT_A)
+            .count()
+        )
+        assert count == 0
+
+
+def test_persist_multiple_operations(db: AccountBatchDB) -> None:
+    # 预填充数据
+    Session = sessionmaker(bind=db.engine)
+    with Session() as session:
+        existing1 = AccountStorageModel(
+            address=CANONICAL_ADDRESS_A, slot=TEST_SLOT_A, value=b"old_value1"
+        )
+        existing2 = AccountStorageModel(
+            address=CANONICAL_ADDRESS_A, slot=TEST_SLOT_B, value=b"old_value2"
+        )
+        session.add_all([existing1, existing2])
+        session.commit()
+
+    # 组合操作：更新A，删除B，新增C
+    db.set_item(TEST_SLOT_A, b"updated_value")  # 更新
+    db.delete_item(TEST_SLOT_B)  # 删除
+    db.set_item(TEST_SLOT_C, b"new_value")  # 新增
+    db.persist()
+
+    # 验证组合操作结果
+    with Session() as session:
+        a_item = (
+            session.query(AccountStorageModel)
+            .filter_by(account_address=CANONICAL_ADDRESS_A, slot=TEST_SLOT_A)
+            .one()
+        )
+        assert a_item.value == b"updated_value"
+
+        b_count = (
+            session.query(AccountStorageModel)
+            .filter_by(account_address=CANONICAL_ADDRESS_A, slot=TEST_SLOT_B)
+            .count()
+        )
+        assert b_count == 0
+
+        c_item = (
+            session.query(AccountStorageModel)
+            .filter_by(account_address=CANONICAL_ADDRESS_A, slot=TEST_SLOT_C)
+            .one()
+        )
+        assert c_item.value == b"new_value"
+
+
+def test_checkpoint_rollback_and_persist(db: AccountBatchDB) -> None:
+    # 预先填充数据
+    Session = sessionmaker(bind=db.engine)
+    with Session() as session:
+        initial_data = AccountStorageModel(
+            address=CANONICAL_ADDRESS_A, slot=TEST_SLOT_A, value=b"initial"
+        )
+        session.add(initial_data)
+        session.commit()
+
+    # 提交检查点0 (初始化状态)
+    checkpoint_0 = db.record_checkpoint()
+
+    # 提交检查点1，在检查点1设置值为b'checkpoint1'
+    checkpoint_1 = db.record_checkpoint()
+    db.set_item(TEST_SLOT_A, b"checkpoint1")
+
+    # 提交检查点2，在检查点2删除该值
+    checkpoint_2 = db.record_checkpoint()
+    db.delete_item(TEST_SLOT_A)
+
+    # 提交检查点3，在检查点3重新设置值
+    checkpoint_3 = db.record_checkpoint()
+    db.set_item(TEST_SLOT_A, b"checkpoint3")
+
+    # 验证当前状态
+    assert db.get_item(TEST_SLOT_A) == b"checkpoint3", "检查点3数据验证"
+
+    # 回滚至检查点0（丢弃所有后续检查点）
+    db.discard(checkpoint_0)
+
+    # 验证回滚后状态恢复到初始状态
+    assert db.get_item(TEST_SLOT_A) is None
+
+    # 持久化到数据库
+    db.persist()
+
+    # 验证数据库中的值被正确清除
+    with Session() as session:
+        item = (
+            session.query(AccountStorageModel)
+            .filter_by(account_address=CANONICAL_ADDRESS_A, slot=TEST_SLOT_A)
+            .one()
+        )
+        assert item.value == b"initial"
 
 
 # 测试异常情况
