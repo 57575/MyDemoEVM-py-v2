@@ -36,6 +36,16 @@ from vm.utils.constant import BLANK_ROOT_HASH
 T = TypeVar("T")
 
 
+class ConfigurableAPI(ABC):
+    """
+    A class providing inline subclassing.
+    """
+
+    @classmethod
+    @abstractmethod
+    def configure(cls: Type[T], __name__: str = None, **overrides: Any) -> Type[T]: ...
+
+
 class AccountAPI(ABC):
     """
     A class representing an Ethereum account.
@@ -374,6 +384,40 @@ class StackAPI(ABC):
 
     @abstractmethod
     def size(self) -> None: ...
+
+
+class GasMeterAPI(ABC):
+    """
+    A class to define a gas meter.
+    """
+
+    start_gas: int
+    gas_refunded: int
+    gas_remaining: int
+
+    #
+    # Write API
+    #
+    @abstractmethod
+    def consume_gas(self, amount: int, reason: str) -> None:
+        """
+        Consume ``amount`` of gas for a defined ``reason``.
+        """
+        ...
+
+    @abstractmethod
+    def return_gas(self, amount: int) -> None:
+        """
+        Return ``amount`` of gas.
+        """
+        ...
+
+    @abstractmethod
+    def refund_gas(self, amount: int) -> None:
+        """
+        Refund ``amount`` of gas.
+        """
+        ...
 
 
 class CodeStreamAPI(ABC):
@@ -1302,6 +1346,50 @@ class ComputationAPI(
     def memory_copy(self, destination: int, source: int, length: int) -> bytes:
         """
         Copy bytes of memory with size ``length`` from ``source`` to ``destination``
+        """
+        ...
+
+    # -- gas consumption -- #
+    @abstractmethod
+    def get_gas_meter(self) -> GasMeterAPI:
+        """
+        Return the gas meter for the computation.
+        """
+        ...
+
+    @abstractmethod
+    def consume_gas(self, amount: int, reason: str) -> None:
+        """
+        Consume ``amount`` of gas from the remaining gas.
+        Raise `eth.exceptions.OutOfGas` if there is not enough gas remaining.
+        """
+        ...
+
+    @abstractmethod
+    def return_gas(self, amount: int) -> None:
+        """
+        Return ``amount`` of gas to the available gas pool.
+        """
+        ...
+
+    @abstractmethod
+    def refund_gas(self, amount: int) -> None:
+        """
+        Add ``amount`` of gas to the pool of gas marked to be refunded.
+        """
+        ...
+
+    @abstractmethod
+    def get_gas_used(self) -> int:
+        """
+        Return the number of used gas.
+        """
+        ...
+
+    @abstractmethod
+    def get_gas_remaining(self) -> int:
+        """
+        Return the number of remaining gas.
         """
         ...
 

@@ -101,7 +101,7 @@ class BaseState(StateAPI):
 
     def set_transient_storage(self, address: Address, slot: int, value: bytes) -> None:
         return self.transient_storage.set_transient_storage(address, slot, value)
-    
+
     #
     # Logging
     #
@@ -193,13 +193,15 @@ class BaseState(StateAPI):
 
         See EIP-2929
         """
-        return (
-            self._account_db.is_address_warm(address)
-            or address in self.computation_class.get_precompiles()
-        )
+        pass
+        # return (
+        #     self._account_db.is_address_warm(address)
+        #     or address in self.computation_class.get_precompiles()
+        # )
 
     def mark_address_warm(self, address: Address) -> None:
-        self._account_db.mark_address_warm(address)
+        pass
+        # self._account_db.mark_address_warm(address)
 
     #
     # Access self._chaindb

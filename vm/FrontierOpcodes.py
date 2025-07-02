@@ -18,7 +18,10 @@ from vm.logic import (
     swap,
     logging,
     cancun_logic,
+    call,
+    system,
 )
+from vm.logic.create import CreateEIP3860, Create2EIP3860
 from vm.utils import constant as constants
 
 
@@ -759,29 +762,34 @@ FRONTIER_OPCODES: Dict[int, OpcodeAPI] = {
     #
     # System
     #
-    # opcode_values.CREATE: system.Create.configure(
-    #     __name__="opcode:CREATE",
-    #     mnemonic=mnemonics.CREATE,
-    #     gas_cost=constants.GAS_CREATE,
-    # )(),
-    # opcode_values.CALL: call.Call.configure(
-    #     __name__="opcode:CALL",
-    #     mnemonic=mnemonics.CALL,
-    #     gas_cost=constants.GAS_CALL,
-    # )(),
-    # opcode_values.CALLCODE: call.CallCode.configure(
-    #     __name__="opcode:CALLCODE",
-    #     mnemonic=mnemonics.CALLCODE,
-    #     gas_cost=constants.GAS_CALL,
-    # )(),
-    # opcode_values.RETURN: as_opcode(
-    #     logic_fn=system.return_op,
-    #     mnemonic=mnemonics.RETURN,
-    #     gas_cost=constants.GAS_ZERO,
-    # ),
-    # opcode_values.SELFDESTRUCT: as_opcode(
-    #     logic_fn=system.selfdestruct,
-    #     mnemonic=mnemonics.SELFDESTRUCT,
-    #     gas_cost=constants.GAS_SELFDESTRUCT,
-    # ),
+    opcode_values.CREATE: CreateEIP3860.configure(
+        __name__="CreateEIP3860",
+        mnemonic=mnemonics.CREATE,
+        gas_cost=constants.GAS_CREATE,
+    )(),
+    opcode_values.CALL: call.Call.configure(
+        __name__="opcode:CALL",
+        mnemonic=mnemonics.CALL,
+        gas_cost=constants.GAS_CALL,
+    )(),
+    opcode_values.CALLCODE: call.CallCode.configure(
+        __name__="opcode:CALLCODE",
+        mnemonic=mnemonics.CALLCODE,
+        gas_cost=constants.GAS_CALL,
+    )(),
+    opcode_values.RETURN: as_opcode(
+        logic_fn=system.return_op,
+        mnemonic=mnemonics.RETURN,
+        gas_cost=constants.GAS_ZERO,
+    ),
+    opcode_values.CREATE2: Create2EIP3860.configure(
+        __name__="Create2EIP3860",
+        mnemonic=mnemonics.CREATE2,
+        gas_cost=constants.GAS_CREATE,
+    )(),
+    opcode_values.SELFDESTRUCT: as_opcode(
+        logic_fn=system.selfdestruct,
+        mnemonic=mnemonics.SELFDESTRUCT,
+        gas_cost=constants.GAS_SELFDESTRUCT,
+    ),
 }

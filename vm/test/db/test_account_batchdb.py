@@ -1,4 +1,5 @@
 import pytest
+from unittest.mock import Mock, patch, call
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 
@@ -103,6 +104,29 @@ def test_commit_checkpoint(db: AccountBatchDB) -> None:
 
     # 验证检查点栈
     assert db._checkpoint_stack == origin_checkpoint_stack
+
+
+def test_flatten_with_multiple_checkpoints(db: AccountBatchDB):
+    """测试有多个检查点时调用flatten方法"""
+    # 创建两个额外的检查点
+    cp1 = db.record_checkpoint()
+    cp2 = db.record_checkpoint()
+
+    # 此时应有3个检查点（根检查点 + cp1 + cp2）
+    assert len(db._checkpoint_stack) == 3
+    assert db.is_flattened is False
+
+    # 设置一些值
+    db.set_item(b"key1", b"value1")
+    db.set_item(b"key2", b"value2")
+
+    # 调用flatten方法
+    db.flatten()
+
+    assert db.is_flattened is True
+    assert len(db._checkpoint_stack) == 1
+    assert db.get_item(b"key1") == b"value1"
+    assert db.get_item(b"key2") == b"value2"
 
 
 def test_discard_checkpoint(db: AccountBatchDB) -> None:

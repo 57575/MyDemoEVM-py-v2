@@ -1,6 +1,13 @@
 from eth_typing import (
     Hash32,
 )
+from eth_typing import (
+    Address,
+    BlockNumber,
+    Hash32,
+)
+
+CREATE_CONTRACT_ADDRESS = Address(b"")
 
 UINT_64_MAX = 2**64 - 1
 UINT_255_MAX = 2**255 - 1
@@ -124,3 +131,18 @@ BASEFEE_OPCODE_GAS = 2
 
 TLOAD_COST = 100
 TSTORE_COST = 100
+
+
+# https://github.com/ethereum/EIPs/issues/160
+GAS_EXP_EIP160 = 10
+GAS_EXPBYTE_EIP160 = 50
+
+
+# https://github.com/ethereum/EIPs/issues/170
+EIP170_CODE_SIZE_LIMIT = 24576
+
+# https://eips.ethereum.org/EIPS/eip-3860
+INITCODE_WORD_COST = 2
+MAX_INITCODE_SIZE = EIP170_CODE_SIZE_LIMIT * 2
+
+EIP3541_RESERVED_STARTING_BYTE = b"\xef"

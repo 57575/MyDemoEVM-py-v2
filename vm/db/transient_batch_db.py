@@ -22,8 +22,8 @@ from vm.AbstractClass import (
     DatabaseAPI,
 )
 from vm.utils.EVMTyping import DBCheckpoint
-
 from vm.db.backends.base_db import BaseDB
+from vm.db.backends.checkpoint import get_next_checkpoint
 
 
 class DeletedEntry:
@@ -44,8 +44,6 @@ REVERT_TO_WRAPPED = DeletedEntry()
 
 ChangesetValue = Union[bytes, DeletedEntry]
 ChangesetDict = Dict[bytes, ChangesetValue]
-
-get_next_checkpoint = cast(Callable[[], DBCheckpoint], count().__next__)
 
 
 class TransientBase(BaseDB):

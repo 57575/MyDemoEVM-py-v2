@@ -10,10 +10,8 @@ from eth_utils import (
     get_extended_debug_logger,
 )
 
-from vm.AbstractClass import (
-    ComputationAPI,
-    OpcodeAPI,
-)
+from vm.AbstractClass import ComputationAPI, OpcodeAPI
+from vm.utils.datatypes import Configurable
 
 T = TypeVar("T")
 
@@ -42,7 +40,9 @@ class _FastOpcode(OpcodeAPI):
         return cls(logic_fn, mnemonic, gas_cost)
 
 
-class Opcode(OpcodeAPI):
+class Opcode(Configurable, OpcodeAPI):
+    mnemonic: str = None
+    gas_cost: int = None
 
     def __init__(self) -> None:
         if self.mnemonic is None:

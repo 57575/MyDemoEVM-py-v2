@@ -10,6 +10,7 @@ from eth_utils.toolz import (
 from sqlalchemy.orm import sessionmaker
 from vm.db.StateDBModel import CodeStorageModel
 from vm.utils.EVMTyping import DBCheckpoint
+from vm.db.backends.checkpoint import get_next_checkpoint
 
 
 class DeletedEntry:
@@ -22,8 +23,6 @@ DELETE_WRAPPED = DeletedEntry()
 
 ChangesetValue = Union[bytes, DeletedEntry]
 ChangesetDict = Dict[bytes, ChangesetValue]
-
-get_next_checkpoint = cast(Callable[[], DBCheckpoint], count().__next__)
 
 
 class CodeBatchDB:

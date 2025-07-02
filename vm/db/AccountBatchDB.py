@@ -4,15 +4,14 @@ from itertools import (
     count,
 )
 from typing import Callable, Dict, List, Union, cast, Set
-from eth_utils.toolz import (
-    first,
-)
+from eth_utils.toolz import first, nth
 from eth_utils import ValidationError
 from eth_typing import Address
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.engine import Engine
 from vm.db.StateDBModel import AccountStorageModel
 from vm.utils.EVMTyping import DBCheckpoint
+from vm.db.backends.checkpoint import get_next_checkpoint
 
 
 class DeletedEntry:
@@ -26,8 +25,6 @@ REVERT_DB = DeletedEntry()
 
 ChangesetValue = Union[bytes, DeletedEntry]
 ChangesetDict = Dict[bytes, ChangesetValue]
-
-get_next_checkpoint = cast(Callable[[], DBCheckpoint], count().__next__)
 
 
 class AccountBatchDB:
@@ -57,6 +54,13 @@ class AccountBatchDB:
         # last() was iterating through all values, so first(reversed()) gives a 12.5x
         # speedup Interestingly, an attempt to cache this value caused a slowdown.
         return first(reversed(self._journal_data.keys()))
+
+    @property
+    def is_flattened(self) -> bool:
+        """
+        :return: whether there are any explicitly committed checkpoints
+        """
+        return len(self._checkpoint_stack) < 2
 
     def get_item(self, key: bytes):
         ## in py-evm, consider warpped db, but we did not consider
@@ -223,6 +227,13 @@ class AccountBatchDB:
         """
         self.__pop_all()
         self.__initial_from_raw_db()
+
+    def flatten(self) -> None:
+        if self.is_flattened:
+            return
+
+        checkpoint_after_root = nth(1, self._checkpoint_stack)
+        self.commit_checkpoint(checkpoint_after_root)
 
     def persist(self) -> None:
         """

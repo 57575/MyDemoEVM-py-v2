@@ -90,9 +90,9 @@ class AccountStorageDB:
         if self._journal_storage.has_checkpoint(checkpoint):
             self._journal_storage.commit_checkpoint(checkpoint)
         else:
-            raise ValidationError(
-                f"account:{self._address} does not have the checkpoint:{checkpoint}"
-            )
+            # if the checkpoint comes before this account started tracking,
+            #    then flatten all changes, without persisting
+            self._journal_storage.flatten()
 
     def get_accessed_slots(self) -> FrozenSet[int]:
         return frozenset(self._accessed_slots)

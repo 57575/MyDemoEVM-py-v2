@@ -16,11 +16,14 @@ from eth_typing import (
 )
 from eth_utils import encode_hex, get_extended_debug_logger, ExtendedDebugLogger
 from cached_property import cached_property
+from eth_hash.auto import (
+    keccak,
+)
 
 # from vm.Storage import Storage
 from vm.EVMLog import EVMlog
 from vm.Message import Message
-from vm.Exception import VMError, Halt
+from vm.Exception import VMError, Halt, OutOfGas, ReservedBytesInCode
 from vm.AbstractClass import (
     OpcodeAPI,
     CodeStreamAPI,
@@ -28,9 +31,16 @@ from vm.AbstractClass import (
     TransactionContextAPI,
     ComputationAPI,
     StateAPI,
+    GasMeterAPI,
 )
 from vm.OpcodeStream import CodeStream
-from vm.utils.constant import STACK_DEPTH_LIMIT
+from vm.utils.constant import (
+    STACK_DEPTH_LIMIT,
+    MAX_INITCODE_SIZE,
+    GAS_CODEDEPOSIT,
+    EIP170_CODE_SIZE_LIMIT,
+    EIP3541_RESERVED_STARTING_BYTE,
+)
 from vm.utils.EVMTyping import BytesOrView
 from vm.utils.numeric import ceil32
 from vm.Memory import Memory
@@ -85,7 +95,6 @@ class Computation(ComputationAPI):
     _error: VMError = None
     _output: bytes = b""
     _log_entries: List[Tuple[int, Address, Tuple[int, ...], bytes]] = None
-
 
     def __init__(
         self,
@@ -207,9 +216,50 @@ class Computation(ComputationAPI):
         transaction_context: TransactionContextAPI,
         parent_computation: Optional[ComputationAPI] = None,
     ) -> ComputationAPI:
+        snapshot = state.snapshot()
+
+        # EIP161 nonce incrementation
+        state.increment_nonce(message.storage_address)
+
+        cls.validate_create_message(message)
+
         computation = cls.apply_message(
             state, message, transaction_context, parent_computation=parent_computation
         )
+
+        if computation.is_error:
+            state.revert(snapshot)
+            return computation
+        else:
+            contract_code = computation.output
+
+            if contract_code:
+                try:
+                    cls.validate_contract_code(contract_code)
+
+                    contract_code_gas_cost = len(contract_code) * GAS_CODEDEPOSIT
+                    computation.consume_gas(
+                        contract_code_gas_cost,
+                        reason="Write contract code for CREATE",
+                    )
+                except VMError as err:
+                    # Different from Frontier: reverts state on gas failure while
+                    # writing contract code.
+                    computation.error = err
+                    state.revert(snapshot)
+                    cls.logger.debug2(f"VMError setting contract code: {err}")
+                else:
+                    if cls.logger:
+                        cls.logger.debug2(
+                            f"SETTING CODE: {encode_hex(message.storage_address)} -> "
+                            f"length: {len(contract_code)} | "
+                            f"hash: {encode_hex(keccak(contract_code))}"
+                        )
+
+                    state.set_code(message.storage_address, contract_code)
+                    state.commit(snapshot)
+            else:
+                state.commit(snapshot)
         """
         in py-evm, the method is used to consume create gas, We simplified it.
         """
@@ -430,16 +480,30 @@ class Computation(ComputationAPI):
                 )
             )
 
-    # -- EVM Gas -- #
+    # -- gas consumption -- #
+    # we just try to simulate the transaction and smart contract execution, thus we ignor the gas consume.
+
+    def get_gas_meter(self) -> GasMeterAPI:
+        pass
+
+    def consume_gas(self, amount: int, reason: str) -> None:
+        pass
+
+    def return_gas(self, amount: int) -> None:
+        pass
+
+    def refund_gas(self, amount: int) -> None:
+        pass
+
+    def get_gas_used(self) -> int:
+        return 0
+
     def get_gas_remaining(self) -> int:
-        """
-        we just try to simulate the transaction and smart contract execution, thus we ignor the gas consume.
-        """
         return self.get_fake_gas()
-        # if self.should_burn_gas:
-        #     return 0
-        # else:
-        #     return self._gas_meter.gas_remaining
+
+    @classmethod
+    def consume_initcode_gas_cost(cls, computation: ComputationAPI) -> None:
+        pass
 
     def get_fake_gas(self) -> int:
         """
@@ -585,3 +649,27 @@ class Computation(ComputationAPI):
             )
 
         return None
+
+    @classmethod
+    def validate_create_message(cls, message: MessageAPI) -> None:
+        # EIP-3860: initcode size limit
+        initcode_length = len(message.code)
+
+        if initcode_length > MAX_INITCODE_SIZE:
+            raise OutOfGas(
+                "Contract code size exceeds EIP-3860 limit of "
+                f"{MAX_INITCODE_SIZE}. Got code of size: {initcode_length}"
+            )
+
+    @classmethod
+    def validate_contract_code(cls, contract_code: bytes) -> None:
+        if len(contract_code) > EIP170_CODE_SIZE_LIMIT:
+            raise OutOfGas(
+                f"Contract code size exceeds EIP170 limit of {EIP170_CODE_SIZE_LIMIT}."
+                f"  Got code of size: {len(contract_code)}"
+            )
+
+        if contract_code[:1] == EIP3541_RESERVED_STARTING_BYTE:
+            raise ReservedBytesInCode(
+                "Contract code begins with EIP3541 reserved byte '0xEF'."
+            )

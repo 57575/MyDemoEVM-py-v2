@@ -4,12 +4,11 @@ from itertools import (
     count,
 )
 from typing import Callable, Dict, List, Union, cast, FrozenSet
-from eth_utils.toolz import (
-    first,
-)
+from eth_utils.toolz import first, nth
 from sqlalchemy.orm import sessionmaker
 from vm.db.StateDBModel import AccountModel
 from vm.utils.EVMTyping import DBCheckpoint
+from vm.db.backends.checkpoint import get_next_checkpoint
 
 
 class DeletedEntry:
@@ -23,8 +22,6 @@ REVERT_DB = DeletedEntry()
 
 ChangesetValue = Union[bytes, DeletedEntry]
 ChangesetDict = Dict[bytes, ChangesetValue]
-
-get_next_checkpoint = cast(Callable[[], DBCheckpoint], count().__next__)
 
 
 class AccountInfoBatchDB:
@@ -51,6 +48,13 @@ class AccountInfoBatchDB:
     def accessed(self) -> FrozenSet[bytes]:
         # Make a defensive copy so callers can't modify the list externally
         return frozenset(self._accessed)
+
+    @property
+    def is_flattened(self) -> bool:
+        """
+        :return: whether there are any explicitly committed checkpoints
+        """
+        return len(self._checkpoint_stack) < 2
 
     def get_item(self, key: bytes):
         ## in py-evm, consider warpped db, but we did not consider
@@ -186,6 +190,13 @@ class AccountInfoBatchDB:
         self._checkpoint_stack.clear()
         self.record_checkpoint()
         return final_changes
+
+    def flatten(self) -> None:
+        if self.is_flattened:
+            return
+
+        checkpoint_after_root = nth(1, self._checkpoint_stack)
+        self.commit_checkpoint(checkpoint_after_root)
 
     def __reapply_checkpoint_to_journal(self, journal_data: ChangesetDict) -> None:
         self.reset()
