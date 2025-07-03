@@ -24,6 +24,7 @@ from vm.Exception import (
 from vm.Opcode import (
     Opcode,
 )
+from vm.utils.constant import WARM_STORAGE_READ_COST
 
 CallParams = Tuple[int, int, Address, Address, Address, int, int, int, int, bool, bool]
 
@@ -31,7 +32,7 @@ CallParams = Tuple[int, int, Address, Address, Address, int, int, int, int, bool
 class BaseCall(Opcode, ABC):
     @abstractmethod
     def compute_msg_extra_gas(
-            self, computation: ComputationAPI, gas: int, to: Address, value: int
+        self, computation: ComputationAPI, gas: int, to: Address, value: int
     ) -> int:
         raise NotImplementedError("Must be implemented by subclasses")
 
@@ -40,7 +41,7 @@ class BaseCall(Opcode, ABC):
         raise NotImplementedError("Must be implemented by subclasses")
 
     def compute_msg_gas(
-            self, computation: ComputationAPI, gas: int, to: Address, value: int
+        self, computation: ComputationAPI, gas: int, to: Address, value: int
     ) -> Tuple[int, int]:
         extra_gas = self.compute_msg_extra_gas(computation, gas, to, value)
         total_fee = gas + extra_gas
@@ -48,9 +49,9 @@ class BaseCall(Opcode, ABC):
         return child_msg_gas, total_fee
 
     def get_account_load_fee(
-            self,
-            computation: ComputationAPI,
-            code_address: Address,
+        self,
+        computation: ComputationAPI,
+        code_address: Address,
     ) -> int:
         """
         Return the gas cost for implicitly loading the account needed to access
@@ -176,7 +177,7 @@ class BaseCall(Opcode, ABC):
 
 class Call(BaseCall):
     def compute_msg_extra_gas(
-            self, computation: ComputationAPI, gas: int, to: Address, value: int
+        self, computation: ComputationAPI, gas: int, to: Address, value: int
     ) -> int:
         account_exists = computation.state.account_exists(to)
 
@@ -213,7 +214,7 @@ class Call(BaseCall):
 
 class CallCode(BaseCall):
     def compute_msg_extra_gas(
-            self, computation: ComputationAPI, gas: int, to: Address, value: int
+        self, computation: ComputationAPI, gas: int, to: Address, value: int
     ) -> int:
         return constants.GAS_CALLVALUE if value else 0
 
@@ -249,12 +250,12 @@ class CallCode(BaseCall):
 
 class DelegateCall(BaseCall):
     def compute_msg_gas(
-            self, computation: ComputationAPI, gas: int, to: Address, value: int
+        self, computation: ComputationAPI, gas: int, to: Address, value: int
     ) -> Tuple[int, int]:
         return gas, gas
 
     def compute_msg_extra_gas(
-            self, computation: ComputationAPI, gas: int, to: Address, value: int
+        self, computation: ComputationAPI, gas: int, to: Address, value: int
     ) -> int:
         return 0
 
@@ -293,7 +294,7 @@ class DelegateCall(BaseCall):
 #
 class CallEIP150(Call):
     def compute_msg_gas(
-            self, computation: ComputationAPI, gas: int, to: Address, value: int
+        self, computation: ComputationAPI, gas: int, to: Address, value: int
     ) -> Tuple[int, int]:
         extra_gas = self.compute_msg_extra_gas(computation, gas, to, value)
         return compute_eip150_msg_gas(
@@ -308,7 +309,7 @@ class CallEIP150(Call):
 
 class CallCodeEIP150(CallCode):
     def compute_msg_gas(
-            self, computation: ComputationAPI, gas: int, to: Address, value: int
+        self, computation: ComputationAPI, gas: int, to: Address, value: int
     ) -> Tuple[int, int]:
         extra_gas = self.compute_msg_extra_gas(computation, gas, to, value)
         return compute_eip150_msg_gas(
@@ -323,7 +324,7 @@ class CallCodeEIP150(CallCode):
 
 class DelegateCallEIP150(DelegateCall):
     def compute_msg_gas(
-            self, computation: ComputationAPI, gas: int, to: Address, value: int
+        self, computation: ComputationAPI, gas: int, to: Address, value: int
     ) -> Tuple[int, int]:
         extra_gas = self.compute_msg_extra_gas(computation, gas, to, value)
         callstipend = 0
@@ -342,13 +343,13 @@ def max_child_gas_eip150(gas: int) -> int:
 
 
 def compute_eip150_msg_gas(
-        *,
-        computation: ComputationAPI,
-        gas: int,
-        extra_gas: int,
-        value: int,
-        mnemonic: str,
-        callstipend: int,
+    *,
+    computation: ComputationAPI,
+    gas: int,
+    extra_gas: int,
+    value: int,
+    mnemonic: str,
+    callstipend: int,
 ) -> Tuple[int, int]:
     if computation.get_gas_remaining() < extra_gas:
         # It feels wrong to raise an OutOfGas exception outside of GasMeter,
@@ -369,7 +370,7 @@ def compute_eip150_msg_gas(
 #
 class CallEIP161(CallEIP150):
     def compute_msg_extra_gas(
-            self, computation: ComputationAPI, gas: int, to: Address, value: int
+        self, computation: ComputationAPI, gas: int, to: Address, value: int
     ) -> int:
         account_is_dead = not computation.state.account_exists(
             to
@@ -419,3 +420,30 @@ class CallByzantium(CallEIP161):
                 "Cannot modify state while inside of a STATICCALL context"
             )
         return call_params
+
+
+class LoadFeeByCacheWarmth:
+    def get_account_load_fee(
+        self,
+        computation: ComputationAPI,
+        code_address: Address,
+    ) -> int:
+        return WARM_STORAGE_READ_COST
+        # was_cold = _mark_address_warm(computation, code_address)
+        # return _account_load_cost(was_cold)
+
+
+class CallEIP2929(LoadFeeByCacheWarmth, CallByzantium):
+    pass
+
+
+class CallCodeEIP2929(LoadFeeByCacheWarmth, CallCodeEIP150):
+    pass
+
+
+class DelegateCallEIP2929(LoadFeeByCacheWarmth, DelegateCallEIP150):
+    pass
+
+
+class StaticCallEIP2929(LoadFeeByCacheWarmth, StaticCall):
+    pass

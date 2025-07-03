@@ -23,7 +23,8 @@ from vm.logic import (
 )
 from vm.logic.create import CreateEIP3860, Create2EIP3860
 from vm.utils import constant as constants
-
+from vm.utils.constant import GAS_SELFDESTRUCT_EIP150
+from vm.utils.ensure_no_static import ensure_no_static
 
 FRONTIER_OPCODES: Dict[int, OpcodeAPI] = {
     #
@@ -767,12 +768,12 @@ FRONTIER_OPCODES: Dict[int, OpcodeAPI] = {
         mnemonic=mnemonics.CREATE,
         gas_cost=constants.GAS_CREATE,
     )(),
-    opcode_values.CALL: call.Call.configure(
+    opcode_values.CALL: call.CallEIP2929.configure(
         __name__="opcode:CALL",
         mnemonic=mnemonics.CALL,
         gas_cost=constants.GAS_CALL,
     )(),
-    opcode_values.CALLCODE: call.CallCode.configure(
+    opcode_values.CALLCODE: call.CallCodeEIP2929.configure(
         __name__="opcode:CALLCODE",
         mnemonic=mnemonics.CALLCODE,
         gas_cost=constants.GAS_CALL,
@@ -782,14 +783,29 @@ FRONTIER_OPCODES: Dict[int, OpcodeAPI] = {
         mnemonic=mnemonics.RETURN,
         gas_cost=constants.GAS_ZERO,
     ),
+    opcode_values.DELEGATECALL: call.DelegateCallEIP2929.configure(
+        __name__="opcode:DELEGATECALL",
+        mnemonic=mnemonics.DELEGATECALL,
+        gas_cost=constants.GAS_NULL,
+    )(),
     opcode_values.CREATE2: Create2EIP3860.configure(
         __name__="Create2EIP3860",
         mnemonic=mnemonics.CREATE2,
         gas_cost=constants.GAS_CREATE,
     )(),
+    opcode_values.STATICCALL: call.StaticCallEIP2929.configure(
+        __name__="opcode:STATICCALL",
+        mnemonic=mnemonics.STATICCALL,
+        gas_cost=constants.GAS_NULL,
+    )(),
+    opcode_values.REVERT: as_opcode(
+        logic_fn=system.revert,
+        mnemonic=mnemonics.REVERT,
+        gas_cost=constants.GAS_ZERO,
+    ),
     opcode_values.SELFDESTRUCT: as_opcode(
-        logic_fn=system.selfdestruct,
+        logic_fn=ensure_no_static(cancun_logic.selfdestruct_eip6780),
         mnemonic=mnemonics.SELFDESTRUCT,
-        gas_cost=constants.GAS_SELFDESTRUCT,
+        gas_cost=GAS_SELFDESTRUCT_EIP150,
     ),
 }

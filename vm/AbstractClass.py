@@ -1223,6 +1223,8 @@ class ComputationAPI(
     The base abstract class for all execution computations.
     """
 
+    logger: ExtendedDebugLogger
+
     state: "StateAPI"
     msg: MessageAPI
     transaction_context: TransactionContextAPI

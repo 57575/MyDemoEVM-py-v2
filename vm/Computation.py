@@ -55,6 +55,7 @@ from vm.FrontierOpcodes import (
 )
 import vm.precompiles as precompiles
 from vm.utils.address import force_bytes_to_address
+from vm.logic.invalid import InvalidOpcode
 
 FRONTIER_PRECOMPILES = {
     force_bytes_to_address(b"\x02"): precompiles.sha256,
@@ -155,7 +156,7 @@ class Computation(ComputationAPI):
                 try:
                     opcode_fn = opcode_lookup[opcode]
                 except KeyError:
-                    raise Exception(f"invalid opcode 0x{opcode}")
+                    opcode_fn = InvalidOpcode(opcode)
                 try:
                     opcode_fn(computation=computation)
                 except Halt:
