@@ -1,3 +1,4 @@
+import functools
 from typing import (
     Any,
     Sequence,
@@ -9,7 +10,7 @@ from vm.utils.EVMTyping import (
     BytesOrView,
 )
 
-from vm.utils.constant import UINT_256_MAX, UINT_64_MAX
+from vm.utils.constant import UINT_256_MAX, UINT_64_MAX, SECPK1_N
 
 
 def validate_uint64(value: int, title: str = "Value") -> None:
@@ -94,3 +95,6 @@ def validate_is_bytes_or_view(value: BytesOrView, title: str = "Value") -> None:
     if isinstance(value, (bytes, memoryview)):
         return
     raise ValidationError(f"{title} must be bytes or memoryview. Got {type(value)}")
+
+
+validate_lt_secpk1n = functools.partial(validate_lte, maximum=SECPK1_N - 1)

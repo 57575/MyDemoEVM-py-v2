@@ -1,3 +1,4 @@
+import itertools
 from typing import (
     Union,
 )
@@ -39,3 +40,13 @@ def signed_to_unsigned(value: int) -> int:
         return value + UINT_256_CEILING
     else:
         return value
+
+
+def get_highest_bit_index(value: int) -> int:
+    value >>= 1
+    for bit_length in itertools.count():
+        if not value:
+            return bit_length
+        value >>= 1
+
+    raise Exception("Invariant: unreachable code path")

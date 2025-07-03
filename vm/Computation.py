@@ -53,15 +53,8 @@ from vm.utils.Validation import (
 from vm.FrontierOpcodes import (
     FRONTIER_OPCODES,
 )
-import vm.precompiles as precompiles
-from vm.utils.address import force_bytes_to_address
 from vm.logic.invalid import InvalidOpcode
-
-FRONTIER_PRECOMPILES = {
-    force_bytes_to_address(b"\x02"): precompiles.sha256,
-    force_bytes_to_address(b"\x03"): precompiles.ripemd160,
-    force_bytes_to_address(b"\x04"): precompiles.identity,
-}
+from vm.precompiles import CANCUN_PRECOMPILES
 
 
 def NO_RESULT(computation: ComputationAPI) -> None:
@@ -86,7 +79,7 @@ class Computation(ComputationAPI):
 
     opcodes: Dict[int, OpcodeAPI] = FRONTIER_OPCODES
     _precompiles: Dict[Address, Callable[[ComputationAPI], ComputationAPI]] = (
-        FRONTIER_PRECOMPILES
+        CANCUN_PRECOMPILES
     )
 
     _stack = None
