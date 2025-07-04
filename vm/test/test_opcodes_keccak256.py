@@ -4,7 +4,7 @@ import pytest
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
-from vm.test.test_opcode import run_general_computation
+from vm.test.test_opcode_arithmetic import run_general_computation
 import vm.OpcodeValues as opcode_values
 
 

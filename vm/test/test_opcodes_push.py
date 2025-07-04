@@ -3,7 +3,7 @@ from hypothesis import given, strategies as st
 from hypothesis.strategies import binary, integers
 from eth_utils import decode_hex, encode_hex
 import vm.OpcodeValues as opcode_values
-from vm.test.test_opcode import ADDRESS_WITH_CODE, build_state, run_computation
+from vm.test.test_opcode_arithmetic import ADDRESS_WITH_CODE, build_state, run_computation
 
 
 @pytest.mark.parametrize("push_size", range(1, 33))

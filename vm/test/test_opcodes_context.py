@@ -7,7 +7,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")
 from eth_utils import decode_hex
 from eth_typing import Address
 
-from vm.test.test_opcode import (
+from vm.test.test_opcode_arithmetic import (
     run_general_computation,
     NORMALIZED_ADDRESS_A,
     NORMALIZED_ADDRESS_B,

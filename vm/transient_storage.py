@@ -38,7 +38,7 @@ class TransientStorage(TransientStorageAPI):
     def set_transient_storage(self, address: Address, slot: int, value: bytes) -> None:
         validate_canonical_address(address)
         validate_uint256(slot)
-        validate_is_bytes(value)  # JournalDB requires `bytes` values
+        validate_is_bytes(value)
 
         key = self._get_key(address, slot)
         self._db[key] = value

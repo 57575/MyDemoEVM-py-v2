@@ -2,7 +2,7 @@ import pytest
 from hypothesis import given, strategies as st
 from typing import List, Tuple, Optional
 
-from vm.test.test_opcode import run_general_computation
+from vm.test.test_opcode_arithmetic import run_general_computation
 import vm.OpcodeValues as opcode_values
 
 

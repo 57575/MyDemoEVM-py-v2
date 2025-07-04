@@ -6,7 +6,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")
 
 from eth_typing import Hash32
 from eth_utils import decode_hex
-from vm.test.test_opcode import (
+from vm.test.test_opcode_arithmetic import (
     run_general_computation,
     build_state,
     CANONICAL_ADDRESS_A,

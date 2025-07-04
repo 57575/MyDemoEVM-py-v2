@@ -1,7 +1,7 @@
 import pytest
 from eth_utils import decode_hex, encode_hex
 import vm.OpcodeValues as opcode_values
-from vm.test.test_opcode import (
+from vm.test.test_opcode_arithmetic import (
     run_general_computation,
     run_computation,
     build_state,

@@ -1,7 +1,7 @@
 import pytest
 from eth_utils import decode_hex
 import vm.OpcodeValues as opcode_values
-from vm.test.test_opcode import build_state, run_computation
+from vm.test.test_opcode_arithmetic import build_state, run_computation
 from vm.Exception import InsufficientStack
 
 
